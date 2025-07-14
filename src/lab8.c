@@ -32,6 +32,8 @@ static void add_word_counts_in_chunk(count_map_t *map, word_t *words,
   // Make this function thread-safe by using the lock
 
   for (size_t i = 0; i < num_words; i++) {
+    if (lock)
+      pthread_mutex_lock(lock); // before touching shared map, lock.
     word_count_entry_t *w = NULL;
     HASH_FIND_STR(*map, words[i], w);
 
@@ -41,6 +43,9 @@ static void add_word_counts_in_chunk(count_map_t *map, word_t *words,
       w = create_entry(words[i], 1);
       HASH_ADD_STR(*map, word, w);
     }
+
+    if (lock)
+      pthread_mutex_unlock(lock); // unlock after being done
   }
 }
 
@@ -63,7 +68,7 @@ static count_map_t count_words_parallel(word_t *words, size_t num_words) {
   size_t chunk_size = num_words / THREAD_COUNT;
 
   // TODO: Perform initialization
-
+  pthread_mutex_init(&count_mutex, NULL); // initialize mutex
   // Launch threads
   for (size_t i = 0; i < THREAD_COUNT; i++) {
     word_t *thread_arg_words = words + i * chunk_size;
@@ -71,12 +76,29 @@ static count_map_t count_words_parallel(word_t *words, size_t num_words) {
         chunk_size + (i == THREAD_COUNT - 1 ? num_words % THREAD_COUNT : 0);
 
     // TODO: Prepare the arguments and launch the threads
+    threads_args[i] =
+        pack_args(&map, thread_arg_words, thread_arg_num_words, &count_mutex);
+
+    // create counter counter_thread_func with packed args, with error handling
+    // if failed creating
+    if (pthread_create(&threads[i], NULL, counter_thread_func,
+                       threads_args[i]) != 0) {
+      perror("pthread_create");
+      exit(EXIT_FAILURE);
+    }
   }
 
   // TODO: Wait for threads to finish
-
+  for (size_t k = 0; k < THREAD_COUNT; k++) {
+    pthread_join(threads[k], NULL);
+  }
   // TODO: Cleanup
+  for (size_t j = 0; j < THREAD_COUNT; j++) {
+    free(threads_args[j]);
+  }
 
+  // destroy mutex after  threads finished
+  pthread_mutex_destroy(&count_mutex);
   return map;
 }
 
@@ -105,7 +127,7 @@ int main(void) {
   count_map_t word_map = NULL;
 
   // Task 2: Replace this function call with the parallelized version.
-  word_map = count_words_seq(words_in, words_in_len);
+  word_map = count_words_parallel(words_in, words_in_len);
   // word_map = count_words_parallel(words_in, words_in_len);
 
   // Print table
@@ -113,7 +135,7 @@ int main(void) {
     // --------- Task 1 --------- \\
     // Sort the table by the sort function in uthash using `sort_func`.
     // TODO
-
+    HASH_SORT(word_map, sort_func);
     print_counts(word_map);
   }
 
